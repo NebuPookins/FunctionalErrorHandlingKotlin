@@ -1,0 +1,510 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Functional Error Handling in Kotlin</title>
+<link rel="stylesheet" href="css/reveal.css">
+<link rel="stylesheet" href="css/theme/black.css">
+<!-- Theme used for syntax highlighting of code -->
+<link rel="stylesheet" href="lib/css/zenburn.css">
+<!-- Printing and PDF exports -->
+<script>
+	var link = document.createElement( 'link' );
+	link.rel = 'stylesheet';
+	link.type = 'text/css';
+	link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+	document.getElementsByTagName( 'head' )[0].appendChild( link );
+</script>
+<style type="text/css">
+body {
+	background: url('brown-woven-straw-texture.jpg') no-repeat center center fixed;
+	background-size: cover;
+}
+code.hljs {
+	background-color: #000000bf;
+}
+</style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+<section>
+  <div>Functional Error Handling in Kotlin</div>
+  <div>&nbsp;</div>
+  <div><small>This talk assumes some limited experience with FP (e.g. you know how to use a lambda)</small></div>
+  <div>&nbsp;</div>
+  <div><small>Interrupt with questions at any time</small></div>
+</section>
+<section>Goal: Write a validator</section>
+<section>
+In Java
+
+<pre><code class="java" data-trim>
+public interface Validator {
+  public boolean isValid(String data);
+}
+</code></pre>
+<div class="fragment">
+In Kotlin
+
+<pre><code class="kotlin" data-trim>
+interface Validator {
+  fun isValid(data: String): Boolean
+}
+</code></pre>
+</div>
+</section>
+<section>
+Example message:
+<pre><code class="json" data-trim>
+{
+	"title": "My Great Book",
+	"author": "Anonymous",
+	"content": "s3://MyBucket/MyGreatBook.mobi"
+}
+</code></pre>
+<div class="fragment">
+	<div>Validation steps:</div>
+	<ol>
+		<li>Deserialize the string as JSON</li>
+		<li class="fragment">Check that the required attributes (e.g. "title", "content") exist</li>
+		<li class="fragment">Check that the content file exists</li>
+	</ol>
+</div>
+</section>
+<section>
+<div>Ideally, write a bunch of small validators that can be composed together</div>
+<ol>
+	<li>Deserialize the string as JSON</li>
+	<li>Check that the required attributes (e.g. "title", "content") exist</li>
+	<li>Check that the content file exists</li>
+</ol>
+</section>
+<section>
+Step 1: Deserialize the string as JSON
+</section>
+<section>
+<div>1. Deserialize the string as JSON</div>
+<pre><code class="kotlin" data-trim>
+class NewBookSubmissionValidator : Validator {
+  private val objectMapper: ObjectMapper = ObjectMapper()
+
+  override fun isValid(data: String): Boolean {
+    val jsonNode = objectMapper.deserialize(data)
+    return true
+  }
+}
+</code></pre>
+<div class="fragment">What if <code>ObjectMapper::deserialize</code> throws an exception?</div>
+</section>
+<section>
+<div>1. Deserialize the string as JSON</div>
+<pre><code class="kotlin" data-trim>
+class NewBookSubmissionValidator : Validator {
+  private val objectMapper: ObjectMapper = ObjectMapper()
+
+  override fun isValid(data: String): Boolean {
+    val jsonNode =
+        try {
+          objectMapper.deserialize(data)
+        } catch (e: JsonParseException) {
+          return false
+        }
+    return true
+  }
+}
+</code></pre>
+</section>
+<section>
+Step 2: Check that the required attributes exist
+</section>
+<section>
+<div>2. Check that the required attributes exist</div>
+<pre><code class="kotlin" data-trim>
+class NewBookSubmissionValidator : Validator {
+  private val objectMapper: ObjectMapper = ObjectMapper()
+
+  override fun isValid(data: String): Boolean {
+    val jsonNode =
+        try {
+          objectMapper.deserialize(data)
+        } catch (e: JsonParseException) {
+          return false
+        }
+    if (jsonNode.getString("title") == null) {
+      return false
+    }
+    if (jsonNode.getString("author") == null) {
+      return false
+    }
+    if (jsonNode.getString("content") == null) {
+      return false
+    }
+    return true
+  }
+}
+</code></pre>
+<div class="fragment">Problem: If a validation fails, we don't know why it failed.</div>
+</section>
+<section>
+<div>Old design:</div>
+<pre><code class="kotlin" data-trim>
+interface Validator {
+  fun isValid(data: String): Boolean
+}
+</code></pre>
+<div>New design:</div>
+<pre><code class="kotlin" data-trim>
+interface Validator {
+  fun validate(data: String): List&lt;String>
+}
+</code></pre>
+<div class="fragment">Return list of validation failures. Empty list means no validation failure.</div>
+</section>
+<section>
+<div>After refactoring:</div>
+<pre><code class="kotlin" data-trim>
+class NewBookSubmissionValidator : Validator {
+  private val objectMapper: ObjectMapper = ObjectMapper()
+
+  override fun validate(data: String): List&lt;String> {
+    val jsonNode =
+        try {
+          objectMapper.deserialize(data)
+        } catch (e: JsonParseException) {
+          return listOf("Could not parse JSON")
+        }
+    if (jsonNode.getString("title") == null) {
+      return listOf("title was missing")
+    }
+    if (jsonNode.getString("author") == null) {
+      return listOf("author was missing")
+    }
+    if (jsonNode.getString("content") == null) {
+      return listOf("content was missing")
+    }
+    return listOf()
+  }
+}
+</code></pre>
+</section>
+<section>
+Step 3: Check that the content file exists
+</section>
+<section>
+<div>3. Check that the content file exists</div>
+<pre><code class="kotlin" data-trim>
+class NewBookSubmissionValidator : Validator {
+  private val objectMapper: ObjectMapper = ObjectMapper()
+  private val s3Client = S3Client()
+
+  override fun validate(data: String): List&lt;String> {
+    val jsonNode =
+        try {
+          objectMapper.deserialize(data)
+        } catch (e: JsonParseException) {
+          return listOf("Could not parse JSON")
+        }
+    if (jsonNode.getString("title") == null) {
+      return listOf("title was missing")
+    }
+    if (jsonNode.getString("author") == null) {
+      return listOf("author was missing")
+    }
+    val content = jsonNode.getString("content")
+    if (content == null) {
+      return listOf("content was missing")
+    }
+    val file =
+        try {
+          s3Client.get(content)
+        } catch (e: NoSuchKeyException) {
+          return listOf("No content file found at $content")
+        } catch (e: S3Exception) {
+          throw e
+        }
+    return listOf()
+  }
+}
+</code></pre>
+<div class="fragment">Problem: Monolithic method</div>
+</section>
+<section>
+<section>
+<div>Ideally, something like this (pseudocode):</div>
+<pre><code class="kotlin" data-trim>
+override fun validate(data: String): List&lt;String> {
+  errorsOrValidJson = getValidationErrorsParsingJsonFor(data)
+  if (errorsOrValidJson is not errors) {
+    errorsOrParsedNewBookMessage =
+      checkAllFieldsPresent(errorsOrValidJson)
+  }
+  if (errorsOrParsedNewBookMessage is not errors) {
+    errorsOrFile =
+      checkCanDownloadFromS3(errorsOrParsedNewBookMessage.content)
+  }
+  if any validation errors along the way, return them
+  otherwise, return empty list
+}
+</code></pre>
+</section>
+<section>
+<div>Why not just throw an exception to return early?</div>
+<ul class="fragment">
+	<li>We don't always want to return early</li>
+	<li class="fragment">For example, want to return all missing fields, not just the first missing field we noticed.</li>
+</ul>
+</section>
+</section>
+<section>
+<div>Either&lt;L, R></div>
+<div class="fragment">
+<div>Example:</div>
+<pre><code class="kotlin" data-trim>
+fun parseJson(data: String): Either&lt;String, JsonNode> {
+  return try {
+    Either.Right(objectMapper.deserialize(data))
+  } catch (e: JsonParseException) {
+    Either.Left("Could not parse JSON")
+  }
+}
+</code></pre>
+</div>
+</section>
+<section>
+<div>Variations: Result&lt;A></div>
+<div>Example:</div>
+<pre><code class="kotlin" data-trim>
+fun parseJson(data: String): Result&lt;JsonNode> {
+  return try {
+    Result.Success(objectMapper.deserialize(data))
+  } catch (e: JsonParseException) {
+    Result.Failure(RuntimeException("Could not parse JSON"))
+  }
+}
+</code></pre>
+<div class="fragment">
+<div>Comparison with Either:</div>
+<pre><code class="kotlin" data-trim>
+fun parseJson(data: String): Either&lt;String, JsonNode> {
+  return try {
+    Either.Right(objectMapper.deserialize(data))
+  } catch (e: JsonParseException) {
+    Either.Left("Could not parse JSON")
+  }
+}
+</code></pre>
+</div>
+</section>
+<section>
+<div>Variations: Try&lt;A></div>
+<div>Example:</div>
+<pre><code class="kotlin" data-trim>
+fun parseJson(data: String): Try&lt;JsonNode> {
+  return Try {
+    objectMapper.deserialize(data)
+  }
+}
+</code></pre>
+<div class="fragment">
+<div>Comparison with Result:</div>
+<pre><code class="kotlin" data-trim>
+fun parseJson(data: String): Result&lt;JsonNode> {
+  return try {
+    Result.Success(objectMapper.deserialize(data))
+  } catch (e: JsonParseException) {
+    Result.Failure(RuntimeException("Could not parse JSON"))
+  }
+}
+</code></pre>
+</div>
+</section>
+<section>
+<div>Variations: Validated&lt;E, A></div>
+<div>Example:</div>
+<pre><code class="kotlin" data-trim>
+fun parseJson(data: String): Validated&lt;String, JsonNode> {
+  return try {
+    Validated.Valid(objectMapper.deserialize(data))
+  } catch (e: JsonParseException) {
+    Validated.Invalid("Could not parse JSON")
+  }
+}
+</code></pre>
+</section>
+<section>
+<div>Special variation: ValidatedNel&lt;E, A></div>
+<ul>
+<li>AKA <code>Validated&lt;Nel&lt;E>, A></code></li>
+<li class="fragment"><code>Nel</code> = Non Empty List</li>
+<li class="fragment">Like <code>Validated&lt;List&lt;E>, A></code>, but with non-emptiness guarantees</li>
+<li class="fragment">There's a built in method on <code>Validated&lt;E, A></code> called <code>toValidatedNel()</code> which converts <code>this</code> to <code>Validated&lt;Nel&lt;E>, A></code></li>
+</ul>
+</section>
+<section>
+<div>You can use extension methods to add converters between the variations</div>
+<pre><code class="kotlin" data-trim>
+fun &lt;A> Try.toEither(): Either&lt;Throwable, A> =
+  when(this) {
+    is Success -> Right(this.value)
+    is Failure -> Left(this.throwable)
+  }
+</code></pre>
+</section>
+<section>
+<div>1. Deserialize the string as JSON</div>
+<pre><code class="kotlin" data-trim>
+fun parseJson(data: String): ValidatedNel&lt;String, JsonNode> {
+  return
+    Try { objectMapper.deserialize(data) }
+    //value is now Try&lt;JsonNode>
+    .toValidated()
+    //value is now Validated&lt;Throwable, JsonNode>
+    .mapLeft { it.message!! }
+    //value is now Validated&lt;String, JsonNode>
+    .toValidatedNel()
+    //value is now ValidatedNel&lt;String, JsonNode>
+}
+</code></pre>
+</section>
+<section>
+<div>2. Check that the required attributes exist</div>
+<pre><code class="kotlin" data-trim>
+data class NewBookMessage(
+  val title: String,
+  val author: String,
+  val content: String
+)
+
+private fun getString(node: JsonNode, key: String)
+    : ValidatedNel&lt;String, String> {
+  val value = node.getString(key)
+  return if (value == null) {
+    Validated.Invalid("No key $key in $node").toValidatedNel()
+  } else {
+    Validated.Valid(value).toValidatedNel()
+  }
+}
+
+private fun unmarshall(node: JsonNode)
+    : ValidatedNel&lt;String, NewBookMessage> {
+  return Validated.apply(
+    getString(node, "title"),
+    getString(node, "author"),
+    getString(node, "content")
+  ) { title, author, content ->
+    NewBookMessage(title, author, content)
+  }
+}
+</code></pre>
+</section>
+<section>
+<div>3. Check that the content file exists</div>
+<pre><code class="kotlin" data-trim>
+private fun checkFileExists(message: NewBookMessage): ValidatedNel<String, File> {
+  return try {
+    Validated.Valid(s3Client.get(message.content)).toValidatedNel()
+  } catch (e: NoSuchKeyException) {
+    Validated.Invalid(e.message).toValidatedNel()
+  }
+}
+</code></pre>
+</section>
+<section>
+<div>flatmap</div>
+<pre><code class="kotlin" data-trim>
+sealed class Validated&lt;E, out T> {
+  abstract fun &lt;T2> flatMapRight(
+    f: (T) -> Validated&lt;E, T2>
+  ) : Validated&lt;E, T2>
+
+  class Valid&lt;out T>(val value: T): Validated&lt;Nothing, T>() {
+    override fun &lt;T2> flatMapRight(
+      f: (T) -> Validated&lt;Nothing, T2>
+    ) : Validated&lt;Nothing, T2> =
+        f.invoke(value)
+  }
+
+  class Invalid&lt;E>(val error: E): Validated&lt;E, Nothing>() {
+    override fun &lt;T2> flatMapRight(
+      f: (Nothing) -> Validated&lt;E, T2>
+    ) : Validated&lt;E, T2> =
+        this
+  }
+}
+</code></pre>
+</section>
+<section>
+<div>Composing the validators together</div>
+<pre><code class="kotlin" data-trim>
+override fun validate(data: String): List&lt;String> {
+  val validationErrors :ValidatedNel&lt;String, Any> =
+    parseJson(data).flatMapRight { jsonNode ->
+      unmarshall(jsonNode)
+    }.flatMapRight { newBookMessage ->
+      checkFileExists(newBookMessage)
+    }
+  return when (validationErrors) {
+    is Validated.Valid -> listOf()
+    is Validated.Invalid -> validationErrors.error.toList()
+  }
+}
+</code></pre>
+</section>
+<section>
+<pre><code class="kotlin" data-trim>
+override fun validate(data: String): List&lt;String> {
+  val validationErrors :ValidatedNel&lt;String, Any> =
+    parseJson(data).flatMapRight { jsonNode ->
+      unmarshall(jsonNode)
+    }.flatMapRight { newBookMessage ->
+      checkFileExists(newBookMessage)
+    }
+  return when (validationErrors) {
+    is Validated.Valid -> listOf()
+    is Validated.Invalid -> validationErrors.error.toList()
+  }
+}
+</code></pre>
+<pre><code class="kotlin" data-trim>
+override fun validate(data: String): List&lt;String> =
+  when (
+    parseJson(data).flatMapRight {
+      unmarshall(it)
+    }.flatMapRight {
+      checkFileExists(it)
+    }
+  ) {
+    is Validated.Valid -> listOf()
+    is Validated.Invalid -> validationErrors.error.toList()
+  }
+}
+</code></pre>
+</section>
+<section>
+Image Sources
+<ul>
+<li>Background Image: Public Domain from http://www.photos-public-domain.com/2011/09/29/brown-woven-straw-texture/</li>
+</ul>
+</section>
+</div>
+</div>
+<script src="lib/js/head.min.js"></script>
+<script src="js/reveal.js"></script>
+<script>
+// More info about config & dependencies:
+// - https://github.com/hakimel/reveal.js#configuration
+// - https://github.com/hakimel/reveal.js#dependencies
+Reveal.configure({ slideNumber: 'c/t' });
+Reveal.initialize({
+	dependencies: [
+		{ src: 'plugin/markdown/marked.js' },
+		{ src: 'plugin/markdown/markdown.js' },
+		{ src: 'plugin/notes/notes.js', async: true },
+		{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } }
+	]
+});
+</script>
+</body>
+</html>
