@@ -402,7 +402,7 @@ private fun unmarshall(node: JsonNode)
 <section>
 <div>3. Check that the content file exists</div>
 <pre><code class="kotlin" data-trim>
-private fun checkFileExists(message: NewBookMessage): ValidatedNel<String, File> {
+private fun checkFileExists(message: NewBookMessage): ValidatedNel&lt;String, File> {
   return try {
     Validated.Valid(s3Client.get(message.content)).toValidatedNel()
   } catch (e: NoSuchKeyException) {
